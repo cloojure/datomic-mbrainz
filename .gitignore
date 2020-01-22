@@ -1,0 +1,15 @@
+*.swp
+.*.swp
+.lein-repl-history
+/target
+/classes
+/checkouts
+pom.xml
+pom.xml.asc
+*.jar
+*.class
+/.lein-*
+/.nrepl-port
+doc
+.idea
+*.iml

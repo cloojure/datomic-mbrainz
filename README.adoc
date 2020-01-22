@@ -1,0 +1,555 @@
+
+= Tupelo: Making Datomic Even Sweeter
+
+Leiningen coordinates:   
+
+image:http://clojars.org/tupelo-datomic/latest-version.svg[ http://clojars.org/tupelo-datomic ]
+
+
+=== The Tupelo-Datomic API Docs http://cloojure.github.io/doc/tupelo-datomic[are posted on GitHub Pages]
+
+== Overview
+
+Have you ever wanted to jump into using Datomic but wished for a simpler starting point? If
+so, then *Tupelo Datomic* is for you! The goal of Tupelo Datomic is to automate all of the detail
+that rarely changes or is needed when dealing with Datomic, making your job simpler.
+
+Suppose we're trying to keep track of information for the world's premiere spy agency. Let's create
+a few attributes that will apply to our heroes & villains (see the executable code 
+link:../../test/tst/tupelo_datomic/bond.clj[in the unit test]).
+
+[source,clojure]
+----
+(ns bond
+  (:require [tupelo.datomic   :as td]
+            [tupelo.schema    :as ts]))
+
+; Create some new attributes. Required args are the attribute name (an optionally namespaced
+; keyword) and the attribute type (full listing at http://docs.datomic.com/schema.html). We wrap
+; the new attribute definitions in a transaction and immediately commit them into the DB.
+(td/transact *conn* ;   required              required              zero-or-more
+                    ;  <attr name>         <attr value type>       <optional specs ...>
+  (td/new-attribute   :person/name         :db.type/string         :db.unique/value)      ; each name      is unique
+  (td/new-attribute   :person/secret-id    :db.type/long           :db.unique/value)      ; each secret-id is unique
+  (td/new-attribute   :weapon/type         :db.type/ref            :db.cardinality/many)  ; one may have many weapons
+  (td/new-attribute   :location            :db.type/string)     ; all default values
+  (td/new-attribute   :favorite-weapon     :db.type/keyword ))  ; all default values
+----
+
+Notice that, when using `(td/transact ...)`, we don't need to wrap everything in a vector.
+
+For the `:weapon/type` attribute, we want to use an enumerated type since there are only a limited
+number of choices available to our antagonists:
+
+[source,clojure]
+----
+; Create some "enum" values. These are degenerate entities that serve the same purpose as an
+; enumerated value in Java (these entities will never have any attributes). Again, we
+; wrap our new enum values in a transaction and commit them into the DB. 
+(td/transact *conn* 
+  (td/new-enum :weapon/gun)
+  (td/new-enum :weapon/knife)
+  (td/new-enum :weapon/guile)
+  (td/new-enum :weapon/wit))
+----
+
+There are several other naming possibilities for this (or any) attribute:
+
+----
+ original          "pure"          pseudo-namespace  random-namespace   simple
+:weapon/gun    :weapon.type/gun     :weapon-gun       :big/gun           :gun
+:weapon/knife  :weapon.type/knife   :weapon-knife     :sharp/knife       :knife
+:weapon/guile  :weapon.type/guile   :weapon-guile     :effortless/guile  :guile
+:weapon/wit    :weapon.type/wit     :weapon-wit       :rapier/wit        :wit
+----
+
+To Datomic, all of these attribute naming styles are equally valid. In
+particular, Datomic applies no semantic difference between any of these
+choices. Datomic effectively treats any attribute name as an opaque string.  For
+simplicity, one may wish to omit any attribute namespaces until the project has
+grown large enough to warrant them.  Note that two of our attributes (`:location` &
+`:favorite-weapon`) have no namespace.  We also could have omitted the namespace on the weapons
+themselves, using only `:gun`, `:knife`, `:guile`, and `:wit`.
+
+Note that the original Datomic docs use the "pure" convention for naming attributes and their
+values. In the "pure" convention, an attribute like `:weapon/type` would only have values like
+`:weapon.type/gun`, where the name of the attribute becomes the namespace for all of its possible
+values (with the slash replaced by a dot).
+
+Let's create a few antagonists and load them into the DB. Note that we are just using plain Clojure
+values and literals here, and we don't have to worry about any Datomic specific conversions.
+
+[source,clojure]
+----
+; Create some antagonists and load them into the db.  We can specify some of the
+; attribute-value pairs at the time of creation, and add others later. Note that
+; whenever we are adding multiple values for an attribute in a single step (e.g.
+; :weapon/type), we must wrap all of the values in a set. Note that the set
+; implies there can never be duplicate weapons for any one person.  As before,
+; we immediately commit the new entities into the DB.
+(td/transact *conn* 
+  (td/new-entity { :person/name "James Bond" :location "London"     :weapon/type #{ :weapon/gun :weapon/wit   } } )
+  (td/new-entity { :person/name "M"          :location "London"     :weapon/type #{ :weapon/gun :weapon/guile } } )
+  (td/new-entity { :person/name "Dr No"      :location "Caribbean"  :weapon/type    :weapon/gun                 } ))
+----
+
+And, just like that, we have values persisted in the DB! Let's check that they are really there:
+
+[source,clojure]
+----
+; Verify the antagonists were added to the DB
+(let [people (get-people (live-db)) ]
+  (is (= people   
+         #{ {:person/name "James Bond"    :location "London"      :weapon/type #{:weapon/wit    :weapon/gun} }
+            {:person/name "M"             :location "London"      :weapon/type #{:weapon/guile  :weapon/gun} }
+            {:person/name "Dr No"         :location "Caribbean"   :weapon/type #{:weapon/gun               } } } )))
+----
+
+== EntitySpec, EntityID, and LookupRef
+
+Entities in Datomic are specified using an EntitySpec, which is either an EntityID (EID) or a
+LookupRef.
+
+An EntityID (EID) is a globally unique Long value that uniquely specifies any entity in the Datomic
+DB. These are always positive for committed entities in Datomic (negative values indicate temporary
+EIDs used only in building transactions).
+
+A LookupRef is an attribute-value pair (wrapped in a vector), which uniquely specifies an entity.
+If an entity has an attribute specified as either :db.unique/value or :db.unique/identity, that
+entity may be specified using a LookupRef.
+
+Here we verify that we can find James Bond and retrieve all of his attr-val pairs using either type
+of EntitySpec:
+
+[source,clojure]
+----
+; Using James' name, lookup his EntityId (EID). It is a java.lang.Long that is a unique ID across the whole DB.
+(let [james-eid   (td/find-value   :let    [$ (live-db)]     ; like Clojure let
+                                   :find   [?eid]
+                                   :where  {:db/id ?eid :person/name "James Bond"} )
+      _ (s/validate ts/Eid james-eid)  ; verify the expected type
+      ; Retrieve James' attr-val pairs as a map. An entity can be referenced either by EID or by a
+      ; LookupRef, which is a unique attribute-value pair expressed as a vector.
+      james-map   (td/entity-map (live-db) james-eid)                       ; lookup by EID  
+      james-map2  (td/entity-map (live-db) [:person/name "James Bond"] )    ; lookup by LookupRef
+]
+  (is (= james-map james-map2 
+         {:person/name "James Bond" :location "London" :weapon/type #{:weapon/wit :weapon/gun} } ))
+----
+
+We can also use either type of EntitySpec for update
+
+[source,clojure]
+----
+  ; Update the database with more weapons.  If we overwrite some items that are
+  ; already present (e.g. :weapon/gun) it is idempotent (no duplicates are
+  ; allowed).  The first arg to td/update is an EntitySpec (either EntityId or
+  ; LookupRef) and determines the Entity that is updated.
+  (td/transact *conn* 
+    (td/update james-eid   ; update using EID
+        { :weapon/type #{ :weapon/gun :weapon/knife }
+          :person/secret-id 007 } )   ; Note that James has a secret-id but no one else does
+
+    (td/update [:person/name "Dr No"] ; update using LookupRef
+      { :weapon/type #{ :weapon/gun :weapon/knife :weapon/guile } } )))
+----
+
+As expected, our database contains the updated values for Dr No and James Bond. Notice that, since
+`:weapon/type` is implemented as a set in Datomic, duplicate values are not allowed and both
+antagonists have only a single gun:
+
+[source,clojure]
+----
+; Verify current status. Notice there are no duplicate weapons.
+(let [people (get-people (live-db)) ]
+  (is (= people   
+    #{ { :person/name "James Bond" :location "London" :weapon/type #{:weapon/wit :weapon/knife :weapon/gun} :person/secret-id 7 }
+       { :person/name "M" :location "London"          :weapon/type #{:weapon/guile :weapon/gun} }
+       { :person/name "Dr No" :location "Caribbean"   :weapon/type #{:weapon/guile :weapon/knife :weapon/gun} } } )))
+----
+
+Note that James Bond is the only person with an entry for `:person/secret-id`.
+This points out an *_important_* conceptual point regarding Datomic:
+
+==== The Datomic Conceptual Model:
+
+[big]#*_Datomic is conceptually structured as a collection of simple maps, each of which has a
+unique Entity ID and an arbitrary collection of attribute-value pairs._*#
+
+The "Entity ID" or EID is encoded under the key `:db/id` in Datomic. A Clojure example equivalent to
+the above would look like this:
+
+[source,clojure]
+----
+[
+;  <----------------- Maps of Attribute-Value Pairs ----------------------------------------->
+   { :db/id 1001  :person/name "James Bond"  :location "London"     ...  :person/secret-id 7 }
+   { :db/id 1002  :person/name "M"           :location "London"     ...                      }
+   { :db/id 1003  :person/name "Dr No"       :location "Caribbean"  ...                      }
+]
+----
+
+except that the _actual_ EID values are randomly assigned by the Datomic Transactor; we only know
+that they are of type "positive 64-bit integer". Don't worry about running out of EIDs.  If you
+created a billion new EIDs each second, it would require 292 years before you ran out of them.
+
+== Enum Values
+
+The benefit of using enumerated values in Datomic is that we can restrict the the domain of
+acceptable values more easily than by using plain keyword values. For example, if we try to give
+James a non-existent weapon, Datomic will generate an exception:
+
+[source,clojure]
+----
+; Try to add non-existent weapon. This throws an Exception since the 
+; bogus kw does not match up with an entity.
+(is (thrown? Exception @(td/transact *conn* 
+                          (td/update [:person/name "James Bond"] ; update using a LookupRef
+                            { :weapon/type #{ :there.is/no-such-kw } } ))))
+                            ; bogus value for :weapon/type causes exception
+----
+If the valueType for the attribute `:weapon/type` was simply `:keyword` instead of being an _enum_,
+the addition of `:there.is/no-such-kw` would have succeeded, since it is a legal keyword. 
+
+== Query Functions in Tupelo Datomic
+
+When searching for values with Tupelo Datomic, the fundamental result type is a
+TupleSet (a Clojure set containing unique Clojure vectors).  This overcomes a
+possible problem with the native Datomic return type of datomic.query.EntityMap,
+which is lazy-loading and may appear to be missing data (unless forced).  Here
+is an example of the Tupelo Datomic `find` function in action:
+
+[source,clojure]
+----
+; For general queries, use td/find.  It returns a set of tuples (a TupleSet).  Duplicate
+; tuples in the result will be discarded.
+(let [tuple-set (td/find :let   [$ (live-db)]
+                         :find  [?name ?loc] ; <- shape of output tuples
+                         :where {:person/name ?name :location ?loc} ) ; <- Clojure map encodes query
+]
+  (s/validate  ts/TupleSet  tuple-set)       ; verify expected type using Prismatic Schema
+  (s/validate #{ [s/Any] }  tuple-set)       ; literal definition of TupleSet
+  (is (= tuple-set #{ ["Dr No"       "Caribbean"]      ; Even though London is repeated, each tuple is
+                      ["James Bond"  "London"]         ; still unique. Otherwise, any duplicate tuples
+                      ["M"           "London"] } )))   ; will be discarded since output is a clojure set.
+----
+
+Tupelo Datomic uses the `find` function (& variants) for retrieving values from the database.  The
+`find` function modifies the original Datomic query syntax of `(datomic.api/q ...)` 
+in three ways.  
+
+. For convenience, the Tupelo Datomic `find` form does not need to be wrapped in a map literal nor 
+  is any quoting required.  
+
+. To clarify the relationship between program symbols and query arguments, the `:in` 
+  keyword has been replaced with the `:let` keyword, and
+  the syntax has been copied from the Clojure `let` special form. In this way, each of
+  the query variables is more closely aligned with its actual value. Also, the
+  implicit DB `$` must be explicitly tied to its data source in all cases (as
+  shown above).
+
+. Most importantly, the Datalog-inspired query syntax has been simplified with an equivalent syntax
+  based on plain Clojure maps.
+
+The above query matches any entity that has both a `:person/name` and a `:location` attribute. For
+each matching entity, the two values corresponding to `:person/name` and `:location` will be bound
+to the `?name` and `?loc` symbols, respectively, which are used to generate an output tuple of the
+shape `[?name ?loc]`. Each output tuple is added to the result set, which is returned to the caller.
+Since the returned value is a normal Clojure set, duplicate elements are not allowed and any
+non-unique values will be discarded.
+
+What if you want to query for a person with two types of weapons? Suppose you wish to find all of
+the operatives with both `:weapon/guile` and `:weapon/gun` attributes (or more)?  Then just list
+both desired traits, and Datomic will perform in implicit join operation in the query (logical
+"and"):
+
+[source,clojure]
+----
+; Search for people that match both {:weapon/type :weapon/guile} and {:weapon/type :weapon/gun}
+(let [tuple-set   (td/find :let    [$ (live-db)]
+                           :find   [?name]
+                           :where  {:person/name ?name :weapon/type :weapon/guile }
+                                   {:person/name ?name :weapon/type :weapon/gun } ) ]
+  (is (= #{["Dr No"] ["M"]} tuple-set )))
+----
+
+Receiving a TupleSet result is the most general case, but in many instances we
+can save some effort.  If we are retrieving the value for a single attribute per
+entity, we don't need to wrap that result in a tuple. In this case, we can use
+the function `td/find-attr`, which returns a set of scalars as output rather
+than a set of tuples of scalars:
+
+[source,clojure]
+----
+; If you want just a single attribute as output, you can get a set of values (rather than a set of
+; tuples) using td/find-attr.  As usual, any duplicate values will be discarded.
+(let [names     (td/find-attr  :let     [$ (live-db)]
+                               :find   [?name] ; <- a single attr-val output allows use of td/find-attr
+                               :where  {:person/name ?name} )
+      cities    (td/find-attr  :let     [$ (live-db)]
+                               :find   [?loc]  ; <- a single attr-val output allows use of td/find-attr
+                               :where  {:location ?loc} )
+]
+  (is (= names    #{"Dr No" "James Bond" "M"} ))  ; all names are present, since unique
+  (is (= cities   #{"Caribbean" "London"} )))     ; duplicate "London" discarded
+----
+
+A parallel case is when we want results for just a single entity, but multiple values are needed.
+In this case, we don't need to wrap the resulting tuple in a set and we can use the function
+`td/find-entity`, which returns just a single tuple as output rather than a set of tuples:
+
+[source,clojure]
+----
+; If you want just a single tuple as output, you can get it (rather than a set of
+; tuples) using td/find-entity.  It is an error if more than one tuple is found.
+(let [beachy    (td/find-entity    :let    [$    (live-db)      ; assign multiple find variables
+                                            ?loc "Caribbean"]   ;   just like clojure 'let' special form
+                                   :find   [?eid ?name] ; <- output tuple shape
+                                   :where  {:db/id ?eid :person/name ?name :location ?loc} )
+      busy      (try ; error - both James & M are in London
+                  (td/find-entity  :let    [$     (live-db)
+                                            ?loc  "London"]
+                                   :find   [?eid ?name] ; <- output tuple shape
+                                   :where  {:db/id ?eid :person/name ?name :location ?loc} )
+                  (catch Exception ex (.toString ex)))
+]
+  (is (matches? [_ "Dr No"] beachy ))           ; found 1 match as expected
+  (is (re-find #"Exception" busy)))  ; Exception thrown/caught since 2 people in London
+----
+Note that, in the first the call to `find-entity`, the symbol `?loc` is bound to the string
+"Caribbean", while the symbols `?eid` and `?name` are left free. This means the query map in the
+`:where` clause will match any entity that posseses all three attributes `:db/id`, `:location`, and
+`:person/name` (note that every entity has the `:db/id` attribute by definition).  In addition, only
+entities whose `:location` attribute has the value "Caribbean" will be selected.  Once an entity is
+selected, its values for the attributes `:db/id` and `:location` are bound to the symbols `?eid` and
+`?name`, respectively, and the output tuple `[?eid ?name]` is added to the result set. Similar
+processing happens for the second call to `find-entity` when `?loc` is bound to the string "London".
+
+Of course, in some instances you may only want the value of a single attribute for a single
+entity.  In this case, we may use the function `td/find-value`, which returns a single scalar
+result instead of a set of tuples of scalars:
+
+[source,clojure]
+----
+; If you know there is (or should be) only a single scalar answer, you can get the scalar value as
+; output using td/find-value. It is an error if more than one tuple or value is present.
+(let [beachy    (td/find-value   :let    [$    (live-db)     ; Find the name of the 
+                                          ?loc "Caribbean"]  ; only person in the Caribbean
+                                 :find   [?name]
+                                 :where  {:person/name ?name :location ?loc} )
+      busy      (try ; error - multiple results for London
+                  (td/find-value   :let    [$    (live-db)
+                                            ?loc "London"]
+                                   :find   [?eid]
+                                   :where  {:db/id ?eid :person/name ?name :location ?loc} )
+                  (catch Exception ex (.toString ex)))
+      multi     (try ; error - result tuple [?eid ?name] is not scalar
+                  (td/find-value   :let    [$    (live-db)
+                                            ?loc "Caribbean"]
+                                   :find   [?eid ?name]
+                                   :where  {:db/id ?eid :person/name  ?name :location ?loc} )
+                  (catch Exception ex (.toString ex)))
+]
+  (is (= beachy "Dr No"))                       ; found 1 match as expected
+  (is (re-find #"Exception" busy))   ; Exception thrown/caught since 2 people in London
+  (is (re-find #"Exception" multi))) ; Exception thrown/caught since 2-vector is not scalar
+----
+
+=== Using the Datomic Pull API
+
+If one wishes to use queries returning possibly duplicate result items, then the Datomic Pull API is
+required.  Searching for data via `find-pull` returns results in a List (a Clojure vector), rather
+than a Set, so that duplicate result items are not discarded.  As an example, let's find the
+location of all of our entities:
+
+[source,clojure]
+----
+; If you wish to retain duplicate results on output, you must use td/find-pull and the Datomic
+; Pull API to return a list of results (instead of a set).
+(let [result-pull     (td/find-pull   :let    [$ (live-db)]                 ; $ is the implicit db name
+                                      :find   [ (pull ?eid [:location]) ]   ; output :location for each ?eid found
+                                      :where  [ [?eid :location] ] )        ; find any ?eid with a :location attr
+      result-sort     (sort-by #(-> % first :location) result-pull)
+]
+  (s/validate [ts/TupleMap] result-pull)    ; a list of tuples of maps
+  (is (= result-sort  [ [ {:location "Caribbean"} ] 
+                        [ {:location "London"   } ]
+                        [ {:location "London"   } ] ] )))
+----
+
+=== Retracting Data from Datomic
+
+Suppose James throws his knife at a villan. We need to remove it from the DB.
+[source,clojure]
+----
+(td/transact *conn* 
+  (td/retract-value james-eid :weapon/type :weapon/knife))
+(is (= (td/entity-map (live-db) james-eid)  ; lookup by EID 
+       {:person/name "James Bond" :location "London" :weapon/type #{:weapon/wit :weapon/gun} :person/secret-id 7 } ))
+----
+
+Once James has defeated Dr No, we need to remove him (& everything he possesses) from the database.
+
+[source,clojure]
+----
+; We see that Dr No is in the DB...
+(let [tuple-set   (td/find  :let    [$ (live-db)]
+                            :find   [?name ?loc] ; <- shape of output tuples
+                            :where  {:person/name ?name :location ?loc} ) ]
+  (is (= tuple-set #{ ["James Bond"     "London"]
+                      ["M"              "London"]
+                      ["Dr No"          "Caribbean"]
+                      ["Honey Rider"    "Caribbean"] } )))
+; we do the retraction...
+(td/transact *conn*
+  (td/retract-entity [:person/name "Dr No"] ))
+; ...and now he's gone!
+(let [tuple-set   (td/find  :let    [$ (live-db)]
+                            :find   [?name ?loc]
+                            :where  {:person/name ?name :location ?loc} ) ]
+  (is (= tuple-set #{ ["James Bond"     "London"]
+                      ["M"              "London"]
+                      ["Honey Rider"    "Caribbean"] } )))
+----
+
+== Using Datomic Partitions
+
+Datomic allows the user to create `partitions` within the DB.  Datomic
+partitions serve solely as a structural optimization, and do not control or
+limit how or by whom datoms may be accessed.  The effect of a partition in
+Datomic is to effectively "pre-group" all entities in that partition so that
+they are adjacent in storage, which _may_ (or may not) improve access times for
+related entities that are often accessed together.
+
+In Tupelo Datomic, we may easily create and use partitions:
+
+[source,clojure]
+----
+; Create a partition named :people (we could namespace it like :db.part/people if we wished)
+(td/transact *conn* 
+  (td/new-partition :people ))
+
+; Create Honey Rider and add her to the :people partition
+(let [tx-result   @(td/transact *conn* 
+                      (td/new-entity :people ; <- partition is first arg (optional) to td/new-entity 
+                        { :person/name "Honey Rider" :location "Caribbean" :weapon/type #{:weapon/knife} } ))
+      [honey-eid]  (td/eids tx-result)  ; retrieve Honey Rider's EID from the seq (destructuring)
+]
+  (s/validate ts/Eid honey-eid)  ; verify the expected type
+  (is (= :people ; verify the partition name for Honey's EID
+         (td/partition-name (live-db) honey-eid))))
+----
+
+In addition to keeping related entities adjacent in storage, one may also look up all entities in a
+given partition by using the `(td/partition-eids ...)` function:
+
+[source,clojure]
+----
+; Show that only Honey is in the people partition
+(let [people-eids           (td/partition-eids (live-db) :people)
+      people-entity-maps    (map #(td/entity-map (live-db) %) people-eids) ]
+                                 ; td/entity-map returns a map of attr-vals given an EntitySpec
+  (is (= people-entity-maps [
+           {:person/name "Honey Rider", :weapon/type #{:weapon/knife}, 
+            :location "Caribbean"} ] )))
+----
+
+== Processing Transaction Results
+
+We may wish on occasion to inspect the results of a particular transaction for transaction ID, EID,
+etc.  We can easily gain access to the datoms created during a transaction by using the `tx-datoms`
+function.  Using the example for Honey Rider above,
+
+[source,clojure]
+----
+  ; Create Honey Rider and add her to the :people partition
+  (let [tx-result   @(td/transact *conn* 
+                        (td/new-entity :people ; <- partition is first arg (optional) to td/new-entity 
+                          { :person/name "Honey Rider" :location "Caribbean" :weapon/type #{:weapon/knife} } ))
+        tx-datoms   (td/tx-datoms (live-db) tx-result)
+  ]
+    ; tx-datoms looks like:
+    ;    [ {:e 13194139534328,
+    ;       :a :db/txInstant,
+    ;       :v #inst "2016-10-02T21:45:44.689-00:00",
+    ;       :tx 13194139534328,
+    ;       :added true}
+    ;      {:e 299067162756089,
+    ;       :a :person/name,
+    ;       :v "Honey Rider",
+    ;       :tx 13194139534328,
+    ;       :added true}
+    ;      {:e 299067162756089,
+    ;       :a :location,
+    ;       :v "Caribbean",
+    ;       :tx 13194139534328,
+    ;       :added true}
+    ;      {:e 299067162756089,
+    ;       :a :weapon/type,
+    ;       :v 17592186045419,
+    ;       :tx 13194139534328,
+    ;       :added true} ]
+    (is (= "Honey Rider" (:v (only (keep-if #(= :person/name  (:a %)) tx-datoms)))))
+    (is (= "Caribbean"   (:v (only (keep-if #(= :location     (:a %)) tx-datoms)))))
+    (is (= 1                (count (keep-if #(= :weapon/type  (:a %)) tx-datoms))))
+    (is (= 1                (count (keep-if #(= :db/txInstant (:a %)) tx-datoms))))
+    (is (apply = (map :tx tx-datoms)))  ; All datoms have the same :tx value
+  )
+----
+
+Other informational functions
+(please see link:http://cloojure.github.io/doc/tupelo-datomic/tupelo-datomic.core.html[the
+Tupelo-Datomic API docs] for details).
+
+[source,clojure]
+----
+(is-transaction?  db-val entity-spec)
+  "Returns true if an entity is a transaction (i.e. it is in the :db.part/tx partition)"
+
+(transactions db-val)
+  "Returns a lazy sequence of entity-maps for all DB transactions"
+
+(eids tx-result)
+  "Returns a collection of the EIDs created in a transaction."
+
+(txid tx-result)
+  "Returns the EID of a transaction"
+----
+
+== Future Work
+
+Lots more to come!
+
+== Requirements
+ - Clojure 1.7.0
+ - Java 1.8
+
+== License
+
+Copyright © 2015-2017  Alan Thompson
+
+Distributed under the link:https://www.eclipse.org/legal/epl-v10.html[Eclipse Public License], the same as Clojure.
+
+Developed using link:https://www.jetbrains.com/idea/[*IntelliJ IDEA*] 
+with the link:https://cursive-ide.com/[*Cursive* Clojure plugin].
+
+image:resources/intellij-idea-logo-400.png[IntelliJ,200,200]
+image:resources/cursive-logo-300.png[Cursive]
+
+==== ToDo List (#todo)
+
+  add example for (d/entity-db ...)
+  add comparison from conj 2015 talk
+  add example linking entities
+  add docs for new-attribute optional specs (& default values)
+  seattle tutorial using tupelo datomic
+  mbrainz tutorial using tupelo datomic
+  general datamoic tutorial using tupelo
+    including details & gotchas
+  data import semantics
+  maybe rename td/transact -> td/transact! or td/tx!
+  think about copying semantics from atoms (swap! reset! etc)
+  rename new-attribute -> create-attribute, etc:   new-*  ->  create-*
+  test/document if re-create a given attr, enum, partition etc. Also, does it matter if do same
+    thing twice or 2nd one is different
+
