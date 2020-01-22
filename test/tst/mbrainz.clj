@@ -15,8 +15,15 @@
 (def datomic-uri "datomic:dev://localhost:4334/mbrainz-1968-1973") ; the URI for our test db
 (def conn (d/connect datomic-uri)) ; create & save a connection to the db
 
-;(def rules (edn/read-string
-;             (slurp (io/resource "rules.edn"))))
+(def rules (edn/read-string
+             (slurp (io/resource "rules.edn"))))
+(comment  ; sample rules-collection with one rule
+  (def rules
+    '[; Given ?t bound to track entity-ids, binds ?r to the corresponding
+      ; set of album release entity-ids
+      [(track-release ?t ?r)
+       [?m :medium/tracks ?t]
+       [?r :release/media ?m]]]))
 
 ;---------------------------------------------------------------------------------------------------
 ; Convenience function to keep syntax a bit more concise
@@ -54,8 +61,7 @@
      ]
     `(let [query-tuples# (d/q '{:find  ~yield-vec
                                 :in    [~@let-syms]
-                                :where ~where-vec-final
-                                }
+                                :where ~where-vec-final }
                            ~@let-srcs)
            result-set#   (set (for [tuple# query-tuples#]
                                 (zipmap ~yield-kws (vec tuple#))))]
@@ -154,13 +160,6 @@
   ;              :preds [(<= 1969 ?release-year)
   ;                      (<= ?release-year 1969)]}))
 
-  (def rules
-   '[;; Given ?t bound to track entity-ids, binds ?r to the corresponding
-     ;; set of album release entity-ids
-     [(track-release ?t ?r)
-      [?m :medium/tracks ?t]
-      [?r :release/media ?m]]])
-
   (when false
     (nl) (println "#2 -----------------------------------------------------------------------------")
     (let [result (d/q
@@ -220,10 +219,15 @@
                         {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
                         {:db/id ?eid-release :release/name ?release-name :release/year ?release-year}]
                 :preds [(<= 1969 ?release-year)
-                        (<= ?release-year 1969) ]
-                :rules [ (track-release ?eid-track ?eid-release) ]
+                        (<= ?release-year 1969)]
+                :rules [(track-release ?eid-track ?eid-release)]
                 }))
 
+  (nl)
+  (let [ctr (atom 0)]
+    (doseq [it (d/datoms (live-db) :eavt)]
+      (swap! ctr inc))
+    (spy :total-datoms @ctr))
 
   )
 
