@@ -153,67 +153,55 @@
     (println "-----------------------------------------------------------------------------")
     (pprint/pprint
       (query-map-impl
-       '{:let   [$ (live-db)
-                 ?artist-name "John Lennon"]
-         :yield [?track-name ?release-name ?release-year]
-         :preds [(< ?year 1970)]
-         :where [{:db/id ?eid-artist :artist/name ?artist-name}
-                 {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
-                 {:db/id ?eid-media :medium/tracks ?eid-track}
-                 {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}] })))
+        '{:let   [$ (live-db)
+                  ?artist-name "John Lennon"]
+          :yield [?track-name ?release-name ?release-year]
+          :preds [(< ?year 1970)]
+          :where [{:db/id ?eid-artist :artist/name ?artist-name}
+                  {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
+                  {:db/id ?eid-media :medium/tracks ?eid-track}
+                  {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}]})))
 
   (spyx-pretty :lennon-title-album-year
     (query-map {:let   [$ (live-db)
-                             ?artist-name "John Lennon"]
-                     :yield [?track-name ?release-name ?release-year]
-                     :where [{:db/id ?eid-artist :artist/name ?artist-name}
-                             {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
-                             {:db/id ?eid-media :medium/tracks ?eid-track}
-                             {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}]
-                     :preds [(<= 1969 ?release-year)
-                             (<= ?release-year 1969)]
-                     }))
-  )
+                        ?artist-name "John Lennon"]
+                :yield [?track-name ?release-name ?release-year]
+                :where [{:db/id ?eid-artist :artist/name ?artist-name}
+                        {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
+                        {:db/id ?eid-media :medium/tracks ?eid-track}
+                        {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}]
+                :preds [(<= 1969 ?release-year)
+                        (<= ?release-year 1969)] })))
 
 (dotest
-
   (nl)
   (is= #{{:gid #uuid "76c9a186-75bd-436a-85c0-823e3efddb7f", :ident-type :artist.type/person, :ident-gender :artist.gender/female}}
     (query-map {:let   [$ (live-db)
-                             ?str-name "Janis Joplin"]
-                     :yield [?gid ?ident-type ?ident-gender]
-                     :where [{:db/id ?e :artist/name ?str-name :artist/gid ?gid :artist/type ?eid-type :artist/gender ?eid-gender}
-                             {:db/id ?eid-type :db/ident ?ident-type}
-                             {:db/id ?eid-gender :db/ident ?ident-gender}]}))
+                        ?str-name "Janis Joplin"]
+                :yield [?gid ?ident-type ?ident-gender]
+                :where [{:db/id ?e :artist/name ?str-name :artist/gid ?gid :artist/type ?eid-type :artist/gender ?eid-gender}
+                        {:db/id ?eid-type :db/ident ?ident-type}
+                        {:db/id ?eid-gender :db/ident ?ident-gender}]}))
+  (nl)
+  (spyx-pretty :lennon-tracks-titles-partial
+    (take 10
+      (query-map {:let   [$ (live-db)
+                          ?artist-name "John Lennon"]
+                  :yield [?track-name]
+                  :where [{:db/id ?eid-artist :artist/name ?artist-name}
+                          {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}]})))
+  (nl)
+  (spyx-pretty :lennon-title-album-year
+    (take 10
+      (query-map {:let   [$ (live-db)
+                          ?artist-name "John Lennon"]
+                  :yield [?track-name ?release-name ?release-year]
+                  :where [{:db/id ?eid-artist :artist/name ?artist-name}
+                          {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
+                          {:db/id ?eid-media :medium/tracks ?eid-track}
+                          {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}]})))
 
-  ;(nl)
-  ;(spyx-pretty :lennon-tracks-titles-partial
-  ;  (take 10
-  ;    (query-map
-  ;      :let [$ (live-db)
-  ;            ?artist-name "John Lennon"]
-  ;      :yield [?track-name]
-  ;      :where
-  ;      {:db/id ?eid-artist :artist/name ?artist-name}
-  ;      {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name})))
-  ;
-  ;(nl)
-  ;(spyx-pretty :lennon-title-album-year
-  ;  (take 10
-  ;    (query-map
-  ;      :let [$ (live-db)
-  ;            ?artist-name "John Lennon"]
-  ;      :yield [?track-name ?release-name ?release-year]
-  ;      :where
-  ;        {:db/id ?eid-artist :artist/name ?artist-name}
-  ;        {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
-  ;        {:db/id ?eid-media :medium/tracks ?eid-track }
-  ;        {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year } )
-  ;    ))
-  ;
-  ;
-  ;
-    )
+  )
 
 
 
