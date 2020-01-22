@@ -155,7 +155,10 @@
          :ident-type    :artist.type/person
          :ident-gender  :artist.gender/female}
       ...)
-     "
+
+    An exception is thrown if an orphan query symbol is found (eg `?nammmme`), where 'orphan' means 'used once'. Intentional
+    wildcards (free symbols) must end in a `*` character like '?dont-care*'
+   "
   [ctx]
   (query-map-impl ctx))
 
@@ -286,7 +289,6 @@
                   :preds [(<= 1969 ?release-year)
                           (<= ?release-year 1969)]
                   :rules [(track-release ?eid-track ?eid-release)]})))
-
 
 
   )
