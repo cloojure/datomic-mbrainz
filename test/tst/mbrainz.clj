@@ -144,20 +144,21 @@
 
   Each map in result set is keyword labeled such that:
 
-    (query-map
-      ...
-      :yield [?gid ?ident-type ?ident-gender]  ; Datomic query symbols like `?some-symbol`
-      ...)
+      (query-map
+        ...
+        :yield [?gid ?ident-type ?ident-gender]  ; Datomic query symbols like `?some-symbol`
+        ...)
+
   produces output like:
 
-    #{...    ; maps keyed by keyword version `:some-symbol` with `?` stripped => `:`
-        {:gid           #uuid '76c9a186-75bd-436a-85c0-823e3efddb7f'
-         :ident-type    :artist.type/person
-         :ident-gender  :artist.gender/female}
-      ...)
+      #{...    ; maps keyed by keyword version `:some-symbol` with `?` stripped => `:`
+          {:gid           #uuid '76c9a186-75bd-436a-85c0-823e3efddb7f'
+           :ident-type    :artist.type/person
+           :ident-gender  :artist.gender/female}
+        ...)
 
-    An exception is thrown if an orphan query symbol is found (eg `?nammmme`), where 'orphan' means 'used once'. Intentional
-    wildcards (free symbols) must end in a `*` character like '?dont-care*'
+  An exception is thrown if an orphan query symbol is found (eg `?nammmme`), where 'orphan' means 'used once'. Intentional
+  wildcards (free symbols) must end in a `*` character like '?dont-care*'
    "
   [ctx]
   (query-map-impl ctx))
@@ -195,9 +196,6 @@
                           {:db/id ?eid-media :medium/tracks ?eid-track}
                           {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}]})))
 
-;    )
-;(dotest
-
   (nl)
   ; Testing the macro
   (when false
@@ -213,19 +211,20 @@
                   {:db/id ?eid-media :medium/tracks ?eid-track}
                   {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}]})))
 
-  ;(spyx-pretty :lennon-title-album-year
-  ;  (query-map {:let   [$ (live-db)
-  ;                      ?artist-name "John Lennon"]
-  ;              :yield [?track-name ?release-name ?release-year]
-  ;              :where [{:db/id ?eid-artist :artist/name ?artist-name}
-  ;                      {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
-  ;                      {:db/id ?eid-media :medium/tracks ?eid-track}
-  ;                      {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}]
-  ;              :preds [(<= 1969 ?release-year)
-  ;                      (<= ?release-year 1969)]}))
+  (when true
+    (spyx-pretty :lennon-title-album-year
+      (query-map {:let   [$ (live-db)
+                          ?artist-name "John Lennon"]
+                  :yield [?track-name ?release-name ?release-year]
+                  :where [{:db/id ?eid-artist :artist/name ?artist-name}
+                          {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
+                          {:db/id ?eid-media :medium/tracks ?eid-track}
+                          {:db/id ?eid-release :release/media ?eid-media :release/name ?release-name :release/year ?release-year}]
+                  :preds [(<= 1969 ?release-year)
+                          (<= ?release-year 1969)]})))
 
   (when false
-    (nl) (println "#2 -----------------------------------------------------------------------------")
+    (nl) (println "#2 orig syntax -----------------------------------------------------------------------------")
     (let [result (d/q
                    '[:find ?title ?album ?year
                      :in $ ?artist-name
@@ -242,7 +241,7 @@
       (spyx-pretty result)))
 
   (when false
-    (nl) (println "#3 -----------------------------------------------------------------------------")
+    (nl) (println "#3 orig syntax with rules -----------------------------------------------------------------------------")
     (let [result (d/q
                    '[:find ?title ?album ?year
                      :in $ % ?artist-name
@@ -256,14 +255,12 @@
                      [(< ?year 1970)]]
                    (live-db) rules "John Lennon" ) ]
       (spyx-pretty result)))
-
     )
 
 (dotest
-
   (when false
     (nl) (println "#4-----------------------------------------------------------------------------")
-    (pprint/pprint
+    (pprint/pprint ; testing the macro
       (query-map-impl '{:let   [$ (live-db)
                                 % rules
                                 ?artist-name "John Lennon"]
@@ -272,8 +269,7 @@
                                 {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
                                 {:db/id ?eid-release :release/name ?release-name :release/year ?release-year}]
                         :preds [(<= 1969 ?release-year)
-                                (<= ?release-year 1969)
-                                ]
+                                (<= ?release-year 1969) ]
                         :rules [(track-release ?eid-track ?eid-release)]})))
   (when true
     (nl) (println "-----------------------------------------------------------------------------")
