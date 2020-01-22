@@ -1,13 +1,14 @@
 (ns tst.mbrainz
   (:use tupelo.core tupelo.test)
   (:require
+    [clojure.pprint :as pprint]
     [clojure.string :as str]
     [datomic.api :as d]
     [schema.core :as s]
     [tupelo.datomic :as td]
     [tupelo.datomic.schema :as tdsk]
     [tupelo.schema :as ts]
-    ))
+  ))
 
 (def datomic-uri "datomic:dev://localhost:4334/mbrainz-1968-1973") ; the URI for our test db
 (def conn (d/connect datomic-uri)) ; create & save a connection to the db
@@ -21,46 +22,37 @@
   [qs]
   (it-> qs
     (sym->str it)
-    (str/replace it #"^." \:)
-    (str->sym it) ) )
+    (apply str (drop 1 it))
+    (str->kw it)))
 
-; #todo need checks to stop collection result (:find [?e ...])
-; #todo and scalar result (:find [?e .])
-(defmacro ^:no-doc query-map-base    ; #todo remember 'with'
-  ; returns a HashSet of datomic entity objects
-  "Base macro for improved API syntax for datomic.api/q query function (Entity API)"
-  [& args]
-  ; (newline) (println "find-base =>" args)
+; #todo change :find -> :return  ?
+(defn ^:no-doc query-map-impl
+  [args]
   (when-not (= :where (nth args 4))
     (throw (IllegalArgumentException.
              (str "find-base: 5th arg must be :where, received=" args))))
   (let
     [let-find-map  (apply hash-map (take 4 args))                             >> (spyx let-find-map)
-     where-entries (td/where-clause (drop 5 args))                               >> (spyx where-entries)
-     args-map      (glue let-find-map {:where where-entries})                 >> (spyx args-map)
-     let-vec       (grab :let args-map)                                       >> (spyx let-vec)
+     where-vec     (td/where-clause (drop 5 args))                            >> (spyx-pretty where-vec)
+     let-vec       (grab :let let-find-map)                                   >> (spyx let-vec)
      let-map       (apply hash-map let-vec)                                   >> (spyx let-map)
      let-syms      (keys let-map)                                             >> (spyx let-syms)
      let-srcs      (vals let-map)                                             >> (spyx let-srcs)
-     yield-vec     (grab :yield args-map)                                     >> (spyx yield-vec)
-     yield-kws     (mapv  query-sym->kw yield-vec)                            >> (spyx yield-kws)
-     where-vec     (grab :where args-map)                                     >> (spyx where-vec)
+     yield-vec     (grab :yield let-find-map)                                 >> (spyx yield-vec)
+     yield-kws     (mapv  query-sym->kw  yield-vec)                           >> (spyx yield-kws)
      ]
-    (flush)
-    (when-not (vector? let-vec)
-      (throw (IllegalArgumentException. (str "find-base: value for :let must be a vector; received=" let-vec))))
-    (when-not (vector? yield-vec)
-      (throw (IllegalArgumentException. (str "find-base: value for :yield must be a vector; received=" yield-vec))))
-    (when-not (vector? where-vec)
-      (throw (IllegalArgumentException. (str "find-base: value for :where must be a vector; received=" where-vec))))
-    `(d/q  '{:find   ~yield-vec
-             :where  ~where-vec
-             :in     [ ~@let-syms ] }
-       ~@let-srcs)))
+    `(let [
+           query-tuples# (d/q '{:find  ~yield-vec
+                                :in    [~@let-syms]
+                                :where ~where-vec
+                                }
+                           ~@let-srcs)
+           result-set#   (set (for [tuple# query-tuples#]
+                                (zipmap ~yield-kws (vec tuple#))))]
+       result-set#)))
 
-; #todo change :find -> :return  ?
 (defmacro query-map
-  "Returns search results as a set of tuples (i.e. a TupleSet, or #{ [s/Any] } in Prismatic Schema),
+  "Returns search results as a set of maps (i.e. a TupleSet, or #{ [s/Any] } in Prismatic Schema),
    where each tuple is unique. Usage:
 
     (td/query
@@ -76,33 +68,59 @@
   variables $ and ?name in this case) are more closely aligned with their actual values. Also, the
   implicit DB $ must be explicitly tied to its data source in all cases (as shown above).
   The `:let` and `:yield` clauses may be in any order, but the `:where` clause must come last.
-  "
-  [& args]
-  `(set (for [tuple# (query-map-base ~@args) ]
-          (vec tuple#))))
 
+  Each map in result set is keyword labeled such that:
+
+    (query-map
+      ...
+      :yield [?gid ?ident-type ?ident-gender]  ; Datomic query symbols like `?some-symbol`
+      ...)
+  produces output like:
+
+    #{...    ; maps keyed by keyword version `:some-symbol` with `?` stripped => `:`
+        {:gid           #uuid '76c9a186-75bd-436a-85c0-823e3efddb7f'
+         :ident-type    :artist.type/person
+         :ident-gender  :artist.gender/female}
+      ...)
+     "
+  [& args]
+  (query-map-impl args))
 
 (dotest
+  ; Testing the macro
+  (when false
+    (println "-----------------------------------------------------------------------------")
+    (pprint/pprint
+      (query-map-impl
+        '[:let [$ (live-db)
+                ?str-name "Janis Joplin"]
+          :yield [?gid ?ident-type ?ident-gender]
+          :where {:db/id ?e :artist/name ?str-name :artist/gid ?gid :artist/type ?eid-type :artist/gender ?eid-gender}
+          {:db/id ?eid-type :db/ident ?ident-type}
+          {:db/id ?eid-gender :db/ident ?ident-gender} ] )))
 
-  ;(spy :janis-joplin
-  ;  (td/query
-  ;    :let [$ (live-db)
-  ;          ?str-name "Janis Joplin"]
-  ;    :yield [?gid ?ident-type ?ident-gender]
-  ;    :where  {:db/id ?e :artist/name ?str-name :artist/gid ?gid :artist/type ?eid-type :artist/gender ?eid-gender}
-  ;    {:db/id ?eid-type :db/ident ?ident-type}
-  ;    {:db/id ?eid-gender :db/ident ?ident-gender}
-  ;    ))
-
-  (spy :janis-joplin
+  (is= #{{:gid #uuid "76c9a186-75bd-436a-85c0-823e3efddb7f", :ident-type :artist.type/person, :ident-gender :artist.gender/female}}
     (query-map
       :let [$ (live-db)
             ?str-name "Janis Joplin"]
       :yield [?gid ?ident-type ?ident-gender]
-      :where  {:db/id ?e :artist/name ?str-name :artist/gid ?gid :artist/type ?eid-type :artist/gender ?eid-gender}
-              {:db/id ?eid-type :db/ident ?ident-type}
-              {:db/id ?eid-gender :db/ident ?ident-gender}
-      ))
+      :where
+      {:db/id ?e :artist/name ?str-name :artist/gid ?gid :artist/type ?eid-type :artist/gender ?eid-gender}
+      {:db/id ?eid-type :db/ident ?ident-type}
+      {:db/id ?eid-gender :db/ident ?ident-gender}))
+
+  (spyx-pretty :lennon-tracks-titles
+    (take 10
+      (query-map
+        :let [$ (live-db)
+              ?artist-name "John Lennon"]
+        :yield [?track-name]
+        :where
+        {:db/id ?eid-artist :artist/name ?artist-name}
+        {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
+        ))
+    )
+
 
 
   )
