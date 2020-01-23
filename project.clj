@@ -8,7 +8,7 @@
                  [org.clojure/clojure "1.10.1"]
 
                  ; Normal-priority libs
-                 [io.tupelo/datomic "20.01.19" ]
+                 [io.tupelo/datomic "20.01.22" ]
                  [prismatic/schema "1.1.12"]
                  [tupelo "0.9.188"]
                  ]
