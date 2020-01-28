@@ -15,15 +15,21 @@
 (def datomic-uri "datomic:dev://localhost:4334/mbrainz-1968-1973") ; the URI for our test db
 (def conn (d/connect datomic-uri)) ; create & save a connection to the db
 
+(comment
+  (def rules  ; sample rules-collection with one rule
+    '[    ; list of rules
+
+      ; Rule #1: Given ?t bound to track entity-ids, binds ?r to the corresponding set of album release entity-ids
+      [(track-release ?t ?r) ; interpret as:  (fn-name arg1 arg2)
+       [?m :medium/tracks ?t] ; #1 requirement: all must be true...
+       [?r :release/media ?m] ; #2 requirement: ... or the rule fails
+       ]
+
+      ]))
+
+; Read in the actual rules from the EDN fil
 (def rules (edn/read-string
              (slurp (io/resource "rules.edn"))))
-(comment  ; sample rules-collection with one rule
-  (def rules
-    '[; Given ?t bound to track entity-ids, binds ?r to the corresponding
-      ; set of album release entity-ids
-      [(track-release ?t ?r)
-       [?m :medium/tracks ?t]
-       [?r :release/media ?m]]]))
 
 ;---------------------------------------------------------------------------------------------------
 ; Convenience function to keep syntax a bit more concise
@@ -112,7 +118,9 @@
     (nl) (println "#3 orig syntax with rules -----------------------------------------------------------------------------")
     (let [result (d/q
                    '[:find ?title ?album ?year
-                     :in $ % ?artist-name
+                     :in $ ; bound to `(live-db)`
+                     % ; bound to `rules`
+                     ?artist-name ; bound to "John Lennon"
                      :where
                      [?a :artist/name ?artist-name]
                      [?t :track/artists ?a]
@@ -130,29 +138,29 @@
     (nl) (println "#4-----------------------------------------------------------------------------")
     (pprint/pprint ; testing the macro
       (td/query-map-impl '{:let   [$ (live-db)
-                                % rules
-                                ?artist-name "John Lennon"]
-                        :yield [?track-name ?release-name ?release-year]
-                        :where [{:db/id ?eid-artist :artist/name ?artist-name}
-                                {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
-                                {:db/id ?eid-release :release/name ?release-name :release/year ?release-year}]
-                        :preds [(<= 1969 ?release-year)
-                                (<= ?release-year 1969) ]
-                        :rules [(track-release ?eid-track ?eid-release)]})))
+                                   % rules
+                                   ?artist-name "John Lennon"]
+                           :yield [?track-name ?release-name ?release-year]
+                           :where [{:db/id ?eid-artist :artist/name ?artist-name}
+                                   {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
+                                   {:db/id ?eid-release :release/name ?release-name :release/year ?release-year}]
+                           :preds [(<= 1969 ?release-year)
+                                   (<= ?release-year 1969)]
+                           :rules [(track-release ?eid-track ?eid-release)]})))
   (when true
     (nl) (println "-----------------------------------------------------------------------------")
     (println :lennon-with-rules)
     (spyx-pretty
       (td/query-map {:let   [$ (live-db)
-                          % rules
-                          ?artist-name "John Lennon"]
-                  :yield [?track-name ?release-name ?release-year]
-                  :where [{:db/id ?eid-artist :artist/name ?artist-name}
-                          {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
-                          {:db/id ?eid-release :release/name ?release-name :release/year ?release-year}]
-                  :preds [(<= 1969 ?release-year)
-                          (<= ?release-year 1969)]
-                  :rules [(track-release ?eid-track ?eid-release)]})))
+                             % rules
+                             ?artist-name "John Lennon"]
+                     :yield [?track-name ?release-name ?release-year]
+                     :where [{:db/id ?eid-artist :artist/name ?artist-name}
+                             {:db/id ?eid-track :track/artists ?eid-artist :track/name ?track-name}
+                             {:db/id ?eid-release :release/name ?release-name :release/year ?release-year}]
+                     :preds [(<= 1969 ?release-year)
+                             (<= ?release-year 1969)]
+                     :rules [(track-release ?eid-track ?eid-release)]})))
 
 
   )
